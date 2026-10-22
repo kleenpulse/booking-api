@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { pool } from "@/lib/db";
-import { HttpError, isObject } from "@/lib/http";
+import { decodeCursor, encodeCursor } from "@/lib/cursor";
+import { pool, withTransaction, type Queryable } from "@/lib/db";
+import { HttpError, isObject, parseJson } from "@/lib/http";
+import {
+  findStoredResponse,
+  requestHash,
+  storeResponse,
+  type StoredResponse,
+} from "@/lib/idempotency";
 
 export type BookingStatus = "confirmed" | "cancelled";
 
@@ -47,8 +54,8 @@ export function parseNewBooking(body: unknown): NewBooking {
   return { slot_id, name, email };
 }
 
-export async function createBooking(input: NewBooking): Promise<Booking> {
-  const slot = await pool.query<{ started: boolean }>(
+export async function createBooking(input: NewBooking, db: Queryable = pool): Promise<Booking> {
+  const slot = await db.query<{ started: boolean }>(
     "select start_at <= now() as started from slots where id = $1",
     [input.slot_id],
   );
@@ -56,7 +63,7 @@ export async function createBooking(input: NewBooking): Promise<Booking> {
   if (slot.rows[0].started) throw new HttpError(400, "slot has already started");
 
   // The partial unique index decides who wins a race for the same slot.
-  const { rows } = await pool.query<BookingRow>(
+  const { rows } = await db.query<BookingRow>(
     `insert into bookings (id, slot_id, name, email, status)
      values ($1, $2, $3, $4, 'confirmed')
      on conflict (slot_id) where status = 'confirmed' do nothing
@@ -65,6 +72,28 @@ export async function createBooking(input: NewBooking): Promise<Booking> {
   );
   if (rows.length === 0) throw new HttpError(409, "slot already booked");
   return toBooking(rows[0]);
+}
+
+// The whole POST /bookings pipeline.
+// With an Idempotency-Key, every outcome (201, 400, 404, 409) is stored in the
+// same transaction, so a retry gets back exactly what the first request got.
+export async function submitBooking(text: string, key: string | null): Promise<StoredResponse> {
+  const hash = key ? requestHash(text) : "";
+  return withTransaction(async (client) => {
+    if (key) {
+      const stored = await findStoredResponse(client, key, hash);
+      if (stored) return stored;
+    }
+    let res: StoredResponse;
+    try {
+      res = { status: 201, body: await createBooking(parseNewBooking(parseJson(text)), client) };
+    } catch (err) {
+      if (!(err instanceof HttpError)) throw err;
+      res = { status: err.status, body: { error: err.message } };
+    }
+    if (key) await storeResponse(client, key, hash, res);
+    return res;
+  });
 }
 
 export async function getBooking(id: string): Promise<Booking | null> {
@@ -86,4 +115,40 @@ export async function cancelBooking(id: string): Promise<Booking> {
   if (rows[0]) return toBooking(rows[0]);
   if (!(await getBooking(id))) throw new HttpError(404, "booking not found");
   throw new HttpError(409, "booking already cancelled");
+}
+
+export type BookingQuery = { email: string; limit: number; cursor: string | null };
+
+export function parseBookingQuery(params: URLSearchParams): BookingQuery {
+  const email = params.get("email")?.trim().toLowerCase();
+  if (!email) throw new HttpError(400, "email is required");
+
+  const rawLimit = params.get("limit");
+  let limit = 10;
+  if (rawLimit !== null) {
+    limit = /^\d+$/.test(rawLimit) ? Number(rawLimit) : NaN;
+    if (!(limit >= 1 && limit <= 50)) throw new HttpError(400, "limit must be an integer from 1 to 50");
+  }
+
+  const cursor = params.get("cursor");
+  if (cursor === "") throw new HttpError(400, "cursor is invalid");
+  return { email, limit, cursor };
+}
+
+export type BookingPage = { bookings: Booking[]; next_cursor: string | null };
+
+export async function listBookings({ email, limit, cursor }: BookingQuery): Promise<BookingPage> {
+  const after = cursor === null ? "0" : decodeCursor(cursor);
+  const { rows } = await pool.query<BookingRow & { seq: string }>(
+    `select seq, id, slot_id, name, email, status, created_at from bookings
+     where email = $1 and seq > $2
+     order by seq
+     limit $3`,
+    [email, after, limit + 1],
+  );
+  const page = rows.slice(0, limit);
+  return {
+    bookings: page.map(toBooking),
+    next_cursor: rows.length > limit ? encodeCursor(page[page.length - 1].seq) : null,
+  };
 }

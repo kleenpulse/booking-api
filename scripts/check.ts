@@ -210,6 +210,85 @@ const tests: [string, () => Promise<void>][] = [
     expect(statuses.filter((s) => s === 200).length === 1, "expected exactly one 200", statuses);
     for (const r of results) if (r.status !== 200) expectError(r, 409);
   }],
+
+  ["L4 10 parallel POSTs with one Idempotency-Key: one booking, identical responses", async () => {
+    await reset();
+    const key = { "idempotency-key": `same-${crypto.randomUUID()}` };
+    const body = { slot_id: "s1", name: "Ada", email: "ada@example.com" };
+    const results = await Promise.all(Array.from({ length: 10 }, () => api("POST", "/bookings", body, key)));
+    for (const r of results) {
+      expect(r.status === 201, `expected every response to be 201, got ${r.status}`, results.map((x) => x.status));
+      expect(JSON.stringify(r.body) === JSON.stringify(results[0].body), "replay must match the original exactly", r.body);
+    }
+    const list = await api("GET", "/bookings?email=ada@example.com");
+    expect(list.body.bookings.length === 1, "exactly one booking must exist", list.body);
+
+    const reordered = await api("POST", "/bookings", { email: body.email, slot_id: body.slot_id, name: body.name }, key);
+    expect(reordered.status === 201 && reordered.body.id === results[0].body.id, "key order must not change the request", reordered.body);
+  }],
+
+  ["L4 same key with a different body returns 422; a replayed 409 stays 409", async () => {
+    await reset();
+    const key = { "idempotency-key": `diff-${crypto.randomUUID()}` };
+    const first = await api("POST", "/bookings", { slot_id: "s2", name: "Ada", email: "ada@example.com" }, key);
+    expect(first.status === 201, `expected 201, got ${first.status}`, first.body);
+    expectError(await api("POST", "/bookings", { slot_id: "s3", name: "Ada", email: "ada@example.com" }, key), 422);
+
+    const holder = await api("POST", "/bookings", { slot_id: "s1", name: "Bayo", email: "bayo@example.com" });
+    const conflictKey = { "idempotency-key": `conflict-${crypto.randomUUID()}` };
+    const attempt = { slot_id: "s1", name: "Ada", email: "ada@example.com" };
+    expectError(await api("POST", "/bookings", attempt, conflictKey), 409);
+    await api("DELETE", `/bookings/${holder.body.id}`);
+    expectError(await api("POST", "/bookings", attempt, conflictKey), 409);
+    const fresh = await api("POST", "/bookings", attempt);
+    expect(fresh.status === 201, "without the key, the freed slot must be bookable", fresh.body);
+  }],
+
+  ["L4 bookings by email: oldest first, cursor pages, case-insensitive", async () => {
+    const extra = Array.from({ length: 5 }, (_, i) =>
+      ({ id: `p${i}`, provider: "Dr Page", start: hoursFromNow(100 + i), end: hoursFromNow(100.5 + i) }));
+    await api("POST", "/reset", { slots: [...SLOTS, ...extra] });
+    const created: any[] = [];
+    for (const [i, slot] of extra.entries()) {
+      const email = i % 2 ? "PAT@Example.com" : "pat@example.com";
+      created.push((await api("POST", "/bookings", { slot_id: slot.id, name: "Pat", email })).body);
+      if (i === 1) await api("POST", "/bookings", { slot_id: "s1", name: "Other", email: "other@example.com" });
+    }
+    await api("DELETE", `/bookings/${created[2].id}`);
+
+    const seen: any[] = [];
+    const sizes: number[] = [];
+    let cursor: string | null = null;
+    do {
+      const res: Res = await api("GET", `/bookings?email=${encodeURIComponent("  Pat@EXAMPLE.com ")}&limit=2` +
+        (cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""));
+      expect(res.status === 200, `expected 200, got ${res.status}`, res.body);
+      sizes.push(res.body.bookings.length);
+      seen.push(...res.body.bookings);
+      cursor = res.body.next_cursor;
+    } while (cursor && sizes.length < 10);
+    expect(JSON.stringify(sizes) === JSON.stringify([2, 2, 1]), "expected pages of 2/2/1", sizes);
+    expect(JSON.stringify(seen.map((b) => b.id)) === JSON.stringify(created.map((b) => b.id)), "wrong order or members", seen);
+    expect(seen[2].status === "cancelled", "cancelled bookings must be listed", seen[2]);
+
+    const all = await api("GET", "/bookings?email=pat@example.com");
+    expect(all.body.bookings.length === 5 && all.body.next_cursor === null, "default limit must return all 5", all.body);
+    const none = await api("GET", "/bookings?email=nobody@example.com");
+    expect(none.status === 200 && none.body.bookings.length === 0 && none.body.next_cursor === null, "unknown email lists nothing", none.body);
+  }],
+
+  ["L4 bad email, limit or cursor returns 400", async () => {
+    const bad = [
+      "/bookings", "/bookings?email=", "/bookings?email=%20%20",
+      ...["0", "51", "abc", "1.5", "", "-1", "1e1"].map((l) => `/bookings?email=a@example.com&limit=${l}`),
+      ...["", "!!!", "YWJj", "LTE"].map((c) => `/bookings?email=a@example.com&cursor=${c}`),
+    ];
+    for (const path of bad) {
+      const res = await api("GET", path);
+      expect(res.status === 400, `expected 400 for ${path}, got ${res.status}`, res.body);
+      expect(typeof res.body?.error === "string", "error body must be {error: string}", res.body);
+    }
+  }],
 ];
 
 const only = process.argv[2];

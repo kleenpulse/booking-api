@@ -33,6 +33,7 @@ export function parseSlots(body: unknown): Slot[] {
 
 export async function resetSlots(slots: Slot[]) {
   await withTransaction(async (client) => {
+    await client.query("delete from idempotency_keys");
     await client.query("delete from bookings");
     await client.query("delete from slots");
     if (slots.length === 0) return;
