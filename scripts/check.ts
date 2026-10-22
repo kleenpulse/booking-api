@@ -163,6 +163,53 @@ const tests: [string, () => Promise<void>][] = [
     expect(res.status === 201, `expected 201, got ${res.status}`, res.body);
     expect(res.body.name === "Ada Obi" && res.body.email === "ada@example.com", "fields not normalised", res.body);
   }],
+
+  ["L3 25 parallel bookings for one slot: exactly one 201, the rest 409", async () => {
+    await reset();
+    const results = await Promise.all(
+      Array.from({ length: 25 }, (_, i) =>
+        api("POST", "/bookings", { slot_id: "s1", name: `Racer ${i}`, email: `racer${i}@example.com` })),
+    );
+    const statuses = results.map((r) => r.status);
+    const won = results.filter((r) => r.status === 201);
+    expect(won.length === 1, `expected exactly one 201, got ${won.length}`, statuses);
+    for (const r of results) if (r.status !== 201) expectError(r, 409);
+
+    const got = await api("GET", `/bookings/${won[0].body.id}`);
+    expect(got.status === 200 && got.body.status === "confirmed", "winner must be stored as confirmed", got.body);
+  }],
+
+  ["L3 cancel frees the slot; second cancel 409; unknown id 404", async () => {
+    await reset();
+    const b = await api("POST", "/bookings", { slot_id: "s2", name: "Ada", email: "ada@example.com" });
+    expect(b.status === 201, `expected 201, got ${b.status}`, b.body);
+
+    const cancelled = await api("DELETE", `/bookings/${b.body.id}`);
+    expect(cancelled.status === 200, `expected 200, got ${cancelled.status}`, cancelled.body);
+    expect(JSON.stringify(cancelled.body) === JSON.stringify({ ...b.body, status: "cancelled" }),
+      "cancel must return the booking with status cancelled", cancelled.body);
+
+    const got = await api("GET", `/bookings/${b.body.id}`);
+    expect(got.body.status === "cancelled", "lookup must show cancelled", got.body);
+
+    const slots = await api("GET", "/slots");
+    expect(slots.body.slots.find((s: any) => s.id === "s2").available === true, "cancelled slot must be available", slots.body);
+
+    const rebook = await api("POST", "/bookings", { slot_id: "s2", name: "Bayo", email: "bayo@example.com" });
+    expect(rebook.status === 201 && rebook.body.id !== b.body.id, "freed slot must be bookable again", rebook.body);
+
+    expectError(await api("DELETE", `/bookings/${b.body.id}`), 409);
+    expectError(await api("DELETE", "/bookings/does-not-exist"), 404);
+  }],
+
+  ["L3 10 parallel cancels of one booking: exactly one 200, the rest 409", async () => {
+    await reset();
+    const b = await api("POST", "/bookings", { slot_id: "s3", name: "Ada", email: "ada@example.com" });
+    const results = await Promise.all(Array.from({ length: 10 }, () => api("DELETE", `/bookings/${b.body.id}`)));
+    const statuses = results.map((r) => r.status);
+    expect(statuses.filter((s) => s === 200).length === 1, "expected exactly one 200", statuses);
+    for (const r of results) if (r.status !== 200) expectError(r, 409);
+  }],
 ];
 
 const only = process.argv[2];

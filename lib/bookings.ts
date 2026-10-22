@@ -55,12 +55,15 @@ export async function createBooking(input: NewBooking): Promise<Booking> {
   if (slot.rowCount === 0) throw new HttpError(404, "slot not found");
   if (slot.rows[0].started) throw new HttpError(400, "slot has already started");
 
+  // The partial unique index decides who wins a race for the same slot.
   const { rows } = await pool.query<BookingRow>(
     `insert into bookings (id, slot_id, name, email, status)
      values ($1, $2, $3, $4, 'confirmed')
+     on conflict (slot_id) where status = 'confirmed' do nothing
      returning id, slot_id, name, email, status, created_at`,
     [randomUUID(), input.slot_id, input.name, input.email],
   );
+  if (rows.length === 0) throw new HttpError(409, "slot already booked");
   return toBooking(rows[0]);
 }
 
@@ -70,4 +73,17 @@ export async function getBooking(id: string): Promise<Booking | null> {
     [id],
   );
   return rows[0] ? toBooking(rows[0]) : null;
+}
+
+// Cancelling frees the slot: the unique index only covers confirmed bookings.
+export async function cancelBooking(id: string): Promise<Booking> {
+  const { rows } = await pool.query<BookingRow>(
+    `update bookings set status = 'cancelled'
+     where id = $1 and status = 'confirmed'
+     returning id, slot_id, name, email, status, created_at`,
+    [id],
+  );
+  if (rows[0]) return toBooking(rows[0]);
+  if (!(await getBooking(id))) throw new HttpError(404, "booking not found");
+  throw new HttpError(409, "booking already cancelled");
 }

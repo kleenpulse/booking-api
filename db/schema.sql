@@ -19,3 +19,8 @@ create table if not exists bookings (
   status     text not null check (status in ('confirmed', 'cancelled')),
   created_at timestamptz not null default now()
 );
+
+-- At most one confirmed booking per slot, enforced by the database so it
+-- holds under concurrent requests.
+create unique index if not exists one_confirmed_per_slot
+  on bookings (slot_id) where status = 'confirmed';
