@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "db:setup": "bun scripts/db-setup.ts"
+    "db:setup": "bun scripts/db-setup.ts",
+    "check": "bun scripts/check.ts"
   },
   "dependencies": {
     "@vercel/functions": "^3.10.3",
