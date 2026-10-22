@@ -107,6 +107,62 @@ const tests: [string, () => Promise<void>][] = [
     const slots = await api("GET", "/slots");
     expect(slots.body.slots.every((s: any) => s.available), "all slots should be free after reset", slots.body);
   }],
+
+  ["L2 missing or wrong API key returns 401 on every route", async () => {
+    const routes: [string, string, unknown?][] = [
+      ["POST", "/reset", { slots: SLOTS }],
+      ["GET", "/slots"],
+      ["POST", "/bookings", { slot_id: "s1", name: "Ada", email: "ada@example.com" }],
+      ["GET", "/bookings/anything"],
+      ["DELETE", "/bookings/anything"],
+      ["GET", "/bookings?email=ada@example.com"],
+    ];
+    for (const [method, path, body] of routes) {
+      expectError(await api(method, path, body, { "x-api-key": "" }), 401);
+      expectError(await api(method, path, body, { "x-api-key": API_KEY + "x" }), 401);
+    }
+  }],
+
+  ["L2 invalid booking input returns 400", async () => {
+    await reset();
+    const good = { slot_id: "s1", name: "Ada", email: "ada@example.com" };
+    const bad: unknown[] = [
+      "{not json",
+      [good],
+      { name: "Ada", email: "ada@example.com" },
+      { slot_id: "s1", email: "ada@example.com" },
+      { slot_id: "s1", name: "Ada" },
+      { ...good, slot_id: "" },
+      { ...good, name: "" },
+      { ...good, name: "   " },
+      { ...good, email: "  " },
+      { ...good, name: 42 },
+      { ...good, email: ["ada@example.com"] },
+      { ...good, slot_id: 1 },
+      { ...good, email: "not-an-email" },
+      { ...good, email: "ada@example" },
+      { ...good, email: "a da@example.com" },
+    ];
+    for (const body of bad) {
+      const res = await api("POST", "/bookings", body);
+      expect(res.status === 400, `expected 400 for ${JSON.stringify(body)}, got ${res.status}`, res.body);
+      expect(typeof res.body?.error === "string", "error body must be {error: string}", res.body);
+    }
+    const slots = await api("GET", "/slots");
+    expect(slots.body.slots.every((s: any) => s.available), "rejected input must not book anything", slots.body);
+  }],
+
+  ["L2 slot that already started returns 400", async () => {
+    await reset();
+    expectError(await api("POST", "/bookings", { slot_id: "past", name: "Ada", email: "ada@example.com" }), 400);
+  }],
+
+  ["L2 name and email are trimmed, email lower-cased", async () => {
+    await reset();
+    const res = await api("POST", "/bookings", { slot_id: "s1", name: "  Ada Obi  ", email: "  Ada@Example.COM " });
+    expect(res.status === 201, `expected 201, got ${res.status}`, res.body);
+    expect(res.body.name === "Ada Obi" && res.body.email === "ada@example.com", "fields not normalised", res.body);
+  }],
 ];
 
 const only = process.argv[2];

@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import { unstable_rethrow } from "next/navigation";
 import { connection } from "next/server";
 
@@ -34,12 +35,25 @@ export async function readJson(req: Request): Promise<unknown> {
   return parseJson(await req.text());
 }
 
-// Every route goes through this so all failures come back as {"error": ...}.
+const digest = (value: string) => createHash("sha256").update(value).digest();
+
+// Hashing first gives equal-length buffers, so the compare leaks neither the key nor its length.
+function checkApiKey(req: Request) {
+  const expected = process.env.API_KEY;
+  if (!expected) throw new Error("API_KEY is not configured");
+  const given = req.headers.get("x-api-key");
+  if (!given || !timingSafeEqual(digest(given), digest(expected))) {
+    throw new HttpError(401, "missing or invalid API key");
+  }
+}
+
+// Every route goes through this so auth runs first and all failures come back as {"error": ...}.
 export function handler<C>(fn: (req: Request, ctx: C) => Promise<Response>) {
   return async (req: Request, ctx: C): Promise<Response> => {
     // API responses are always request-time; never prerender them.
     await connection();
     try {
+      checkApiKey(req);
       return await fn(req, ctx);
     } catch (err) {
       unstable_rethrow(err);
