@@ -143,7 +143,9 @@ const tests: [string, () => Promise<void>][] = [
       { ...good, email: "ada@example" },
       { ...good, email: "a da@example.com" },
     ];
-    for (const body of bad) {
+    for (const [i, raw] of bad.entries()) {
+      // A fresh email per body: failed attempts count toward the level 5 limit.
+      const body = (raw as any)?.email === good.email ? { ...(raw as object), email: `l2-${i}@example.com` } : raw;
       const res = await api("POST", "/bookings", body);
       expect(res.status === 400, `expected 400 for ${JSON.stringify(body)}, got ${res.status}`, res.body);
       expect(typeof res.body?.error === "string", "error body must be {error: string}", res.body);
@@ -288,6 +290,47 @@ const tests: [string, () => Promise<void>][] = [
       expect(res.status === 400, `expected 400 for ${path}, got ${res.status}`, res.body);
       expect(typeof res.body?.error === "string", "error body must be {error: string}", res.body);
     }
+  }],
+
+  ["L5 6th attempt for one email in a minute returns 429 with Retry-After; failures count", async () => {
+    await reset();
+    const key = { "idempotency-key": `rl-${crypto.randomUUID()}` };
+    const first = { slot_id: "s1", name: "Ada", email: "rl@example.com" };
+    const attempts: [unknown, Record<string, string>, number][] = [
+      [first, key, 201],
+      [{ ...first, email: "RL@Example.com" }, {}, 409],
+      [{ ...first, slot_id: "nope" }, {}, 404],
+      [{ ...first, slot_id: "past" }, {}, 400],
+      [{ ...first, slot_id: "s2" }, {}, 201],
+    ];
+    for (const [body, headers, status] of attempts) {
+      const res = await api("POST", "/bookings", body, headers);
+      expect(res.status === status, `expected ${status}, got ${res.status}`, res.body);
+    }
+
+    const limited = await api("POST", "/bookings", { ...first, slot_id: "s3", email: " rl@EXAMPLE.com " });
+    expectError(limited, 429);
+    const retryAfter = limited.headers.get("retry-after") ?? "";
+    expect(/^\d+$/.test(retryAfter) && +retryAfter >= 1 && +retryAfter <= 60, "Retry-After must be whole seconds, 1-60", retryAfter);
+
+    const replay = await api("POST", "/bookings", first, key);
+    expect(replay.status === 201, "an idempotent replay is not a new attempt", replay.body);
+    const other = await api("POST", "/bookings", { ...first, slot_id: "s3", email: "other@example.com" });
+    expect(other.status === 201, "another email must not be limited", other.body);
+  }],
+
+  ["L5 invalid input counts too; parallel attempts can't slip past the limit", async () => {
+    await reset();
+    for (let i = 0; i < 5; i++) {
+      expectError(await api("POST", "/bookings", { slot_id: "s1", name: "", email: "bad@example.com" }), 400);
+    }
+    expectError(await api("POST", "/bookings", { slot_id: "s1", name: "Ada", email: "BAD@example.com" }), 429);
+
+    const results = await Promise.all(Array.from({ length: 10 }, () =>
+      api("POST", "/bookings", { slot_id: "nope", name: "Ada", email: "burst@example.com" })));
+    const statuses = results.map((r) => r.status).sort();
+    expect(JSON.stringify(statuses) === JSON.stringify([404, 404, 404, 404, 404, 429, 429, 429, 429, 429]),
+      "expected exactly 5 attempts through and 5 limited", statuses);
   }],
 ];
 

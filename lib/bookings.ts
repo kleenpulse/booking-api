@@ -8,6 +8,7 @@ import {
   storeResponse,
   type StoredResponse,
 } from "@/lib/idempotency";
+import { recordAttempt } from "@/lib/rate-limit";
 
 export type BookingStatus = "confirmed" | "cancelled";
 
@@ -74,9 +75,18 @@ export async function createBooking(input: NewBooking, db: Queryable = pool): Pr
   return toBooking(rows[0]);
 }
 
+// The email an attempt counts against: present even when other fields are invalid.
+function attemptEmail(body: unknown): string | null {
+  if (!isObject(body) || typeof body.email !== "string") return null;
+  return body.email.trim().toLowerCase() || null;
+}
+
 // The whole POST /bookings pipeline.
 // With an Idempotency-Key, every outcome (201, 400, 404, 409) is stored in the
 // same transaction, so a retry gets back exactly what the first request got.
+// A replay is served before the rate limiter: a retry isn't a new attempt.
+// Every other request that names an email counts, failed ones included (the
+// spec's level 5), so the limit is checked before field validation.
 export async function submitBooking(text: string, key: string | null): Promise<StoredResponse> {
   const hash = key ? requestHash(text) : "";
   return withTransaction(async (client) => {
@@ -86,9 +96,14 @@ export async function submitBooking(text: string, key: string | null): Promise<S
     }
     let res: StoredResponse;
     try {
-      res = { status: 201, body: await createBooking(parseNewBooking(parseJson(text)), client) };
+      const body = parseJson(text);
+      const email = attemptEmail(body);
+      if (email) await recordAttempt(client, email);
+      res = { status: 201, body: await createBooking(parseNewBooking(body), client) };
     } catch (err) {
-      if (!(err instanceof HttpError)) throw err;
+      // A 429 rolls back and is never stored, so the same key can go through
+      // once the window frees up.
+      if (!(err instanceof HttpError) || err.status === 429) throw err;
       res = { status: err.status, body: { error: err.message } };
     }
     if (key) await storeResponse(client, key, hash, res);

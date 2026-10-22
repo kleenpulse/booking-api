@@ -39,3 +39,10 @@ create table if not exists idempotency_keys (
 -- json, not jsonb: jsonb reorders keys, and a replay must match the original
 -- response exactly. No-op once the column is already json.
 alter table idempotency_keys alter column body type json using body::json;
+
+create table if not exists booking_attempts (
+  email text not null,
+  at    timestamptz not null default now()
+);
+
+create index if not exists booking_attempts_email_at on booking_attempts (email, at);

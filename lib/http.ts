@@ -6,6 +6,7 @@ export class HttpError extends Error {
   constructor(
     public status: number,
     message: string,
+    public headers?: HeadersInit,
   ) {
     super(message);
   }
@@ -15,8 +16,8 @@ export function json(body: unknown, status = 200, headers?: HeadersInit) {
   return Response.json(body, { status, headers });
 }
 
-export function errorResponse(status: number, message: string) {
-  return json({ error: message }, status);
+export function errorResponse(status: number, message: string, headers?: HeadersInit) {
+  return json({ error: message }, status, headers);
 }
 
 export function isObject(value: unknown): value is Record<string, unknown> {
@@ -57,7 +58,7 @@ export function handler<C>(fn: (req: Request, ctx: C) => Promise<Response>) {
       return await fn(req, ctx);
     } catch (err) {
       unstable_rethrow(err);
-      if (err instanceof HttpError) return errorResponse(err.status, err.message);
+      if (err instanceof HttpError) return errorResponse(err.status, err.message, err.headers);
       console.error(err);
       return errorResponse(500, "internal server error");
     }
