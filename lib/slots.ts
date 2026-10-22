@@ -52,16 +52,32 @@ export async function resetSlots(slots: Slot[]) {
   });
 }
 
-export async function listSlots(provider: string | null): Promise<SlotWithAvailability[]> {
+export async function getSlots(ids: string[]): Promise<Map<string, Slot>> {
+  if (ids.length === 0) return new Map();
+  const { rows } = await pool.query(
+    "select id, provider, start_raw, end_raw from slots where id = any($1::text[])",
+    [ids],
+  );
+  return new Map(
+    rows.map((r) => [r.id, { id: r.id, provider: r.provider, start: r.start_raw, end: r.end_raw }]),
+  );
+}
+
+// upcomingOnly leaves out slots that have started; the API lists every slot.
+export async function listSlots(
+  provider: string | null,
+  upcomingOnly = false,
+): Promise<SlotWithAvailability[]> {
   const { rows } = await pool.query(
     `select s.id, s.provider, s.start_raw, s.end_raw,
             not exists (
               select 1 from bookings b where b.slot_id = s.id and b.status = 'confirmed'
             ) as available
      from slots s
-     where $1::text is null or s.provider = $1
+     where ($1::text is null or s.provider = $1)
+       and (not $2 or s.start_at > now())
      order by s.start_at, s.id`,
-    [provider],
+    [provider, upcomingOnly],
   );
   return rows.map((r) => ({
     id: r.id,

@@ -81,7 +81,7 @@ function attemptEmail(body: unknown): string | null {
   return body.email.trim().toLowerCase() || null;
 }
 
-// The whole POST /bookings pipeline.
+// The whole POST /bookings pipeline, shared by the API route and the web page.
 // With an Idempotency-Key, every outcome (201, 400, 404, 409) is stored in the
 // same transaction, so a retry gets back exactly what the first request got.
 // A replay is served before the rate limiter: a retry isn't a new attempt.
