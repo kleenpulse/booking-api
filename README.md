@@ -2,7 +2,7 @@
 
 A booking API for a clinic, plus a small web page that uses it: see open slots, book one, and get a confirmation. Built for Task 1 of the Koya Cohort 4 assessment, following the [technical spec](https://koyaacademy.com/assessment-api) closely. All five levels are done.
 
-- **Live app and API:** `https://booking-api-phi-five.vercel.app` (the API lives at the root, so this is also the API base URL)
+- **Live app and API:** `https://koya-booking-api.vercel.app` (the API lives at the root, so this is also the API base URL)
 - **Stack:** Next.js 16 (App Router, TypeScript), Postgres on Neon, deployed on Vercel
 
 ## Endpoints
@@ -21,7 +21,7 @@ Every request needs the `X-API-Key` header. A missing or wrong key returns `401`
 ### Try it
 
 ```bash
-BASE=https://booking-api-phi-five.vercel.app
+BASE=https://koya-booking-api.vercel.app
 KEY=<your-api-key>
 
 curl -X POST $BASE/reset -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
