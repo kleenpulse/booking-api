@@ -4,6 +4,7 @@ import { useId } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "motion/react";
+import { useLastLookup } from "@/lib/last-lookup";
 import { TAB_SPRING } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
@@ -19,6 +20,7 @@ export function ActiveNav() {
 
 export function NavPills({ current }: { current: string | null }) {
   const layoutId = useId();
+  const email = useLastLookup();
   return (
     <div className="flex items-center rounded-pill bg-sheet p-1 ring-1 ring-border dark:bg-background/40 dark:ring-glass-border">
       {NAV.map((item) => {
@@ -26,7 +28,7 @@ export function NavPills({ current }: { current: string | null }) {
         return (
           <Link
             key={item.href}
-            href={item.href}
+            href={item.href === "/my-bookings" && email ? `/my-bookings?email=${encodeURIComponent(email)}` : item.href}
             aria-current={active ? "page" : undefined}
             className={cn(
               "relative isolate inline-flex h-8 items-center rounded-pill px-3.5 text-[13px] font-medium whitespace-nowrap outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",

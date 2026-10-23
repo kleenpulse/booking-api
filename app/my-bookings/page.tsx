@@ -7,6 +7,7 @@ import { Search } from "lucide-react";
 import { BookingList } from "@/components/booking-list";
 import { EmptyState } from "@/components/empty-state";
 import { BookingListSkeleton } from "@/components/skeletons";
+import { RememberLookup } from "@/lib/last-lookup";
 import { bookingPage } from "@/lib/views";
 
 export const metadata: Metadata = {
@@ -98,6 +99,7 @@ async function Results({ searchParams }: Pick<PageProps<"/my-bookings">, "search
   const page = await bookingPage(email, null);
   return (
     <>
+      <RememberLookup email={email} />
       <Lookup email={email} />
       <div className="mt-8">
         {page.bookings.length === 0 ? (
