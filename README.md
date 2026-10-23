@@ -86,6 +86,23 @@ BASE_URL=http://localhost:3000 API_KEY=<your-key> bun run check
 
 It calls `/reset`, which wipes all slots and bookings, so don't point it at data you want to keep.
 
+### Eval (development only)
+
+`bun run eval` scores the API on 59 labeled cases in `test/fixtures/eval/`, grouped by level:
+
+- **Requests:** one request after a reset and a few bookings, checked for the status code, the `{"error": ...}` body, and the response body or headers.
+- **Flows:** multi-step cases, such as paging through 5 bookings with a cursor, or a replayed `409` staying `409` after the slot frees up.
+- **Races:** 25 parallel bookings of one slot, 10 parallel cancels, 10 parallel retries with one idempotency key, and a burst of 10 attempts for one email. Each race runs five rounds, since one clean round proves little.
+
+```bash
+bun run eval                  # every level
+bun run eval --level L3 --misses
+```
+
+It doesn't need a server or a database. It calls the route handlers directly, on a private Postgres that it starts itself (from `embedded-postgres`, kept in `.test-results/`), and never touches `DATABASE_URL`. The first run sets that Postgres up in a few seconds; later runs take about one.
+
+With `bun run dev`, the same results appear at `/dev/eval` (**Eval** in the nav), with a **Run eval** button, scores per level next to the previous run, and every case with what it expected and what it got. The page and the nav link don't exist in production.
+
 ## Project layout
 
 ```
@@ -96,12 +113,15 @@ app/
   booking/[id]/     confirmation and cancel
   my-bookings/      lookup with "Load more"
   actions.ts        server actions used by the page
+  dev/eval/         eval scorecard (development only)
 lib/
   http.ts           shared handler: API key check and JSON errors
   bookings.ts       validation, booking, cancel, listing
   idempotency.ts    Idempotency-Key handling
   rate-limit.ts     sliding-window limit per email
   slots.ts  cursor.ts  db.ts
+  dev/              eval runner and its local Postgres
 db/schema.sql       tables and the unique index
-scripts/            db setup, demo seed, contract checks
+scripts/            db setup, demo seed, contract checks, eval
+test/fixtures/eval/ the eval's labeled cases
 ```

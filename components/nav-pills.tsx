@@ -11,7 +11,9 @@ import { cn } from "@/lib/utils";
 const NAV = [
   { href: "/", label: "Book" },
   { href: "/my-bookings", label: "My bookings" },
-] as const;
+  // NODE_ENV is inlined into server and client bundles alike, so this can't mismatch on hydration.
+  ...(process.env.NODE_ENV === "production" ? [] : [{ href: "/dev/eval", label: "Eval" }]),
+];
 
 export function ActiveNav() {
   const pathname = usePathname();

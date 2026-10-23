@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "db:setup": "bun scripts/db-setup.ts",
     "db:seed": "bun scripts/seed-demo.ts",
-    "check": "bun scripts/check.ts"
+    "check": "bun scripts/check.ts",
+    "eval": "bun scripts/eval-api.ts"
   },
   "dependencies": {
     "@vercel/functions": "^3.10.3",
@@ -29,6 +30,7 @@
     "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "embedded-postgres": "18.4.0-beta.17",
     "eslint": "^9",
     "eslint-config-next": "16.4.2",
     "tailwindcss": "^4",
