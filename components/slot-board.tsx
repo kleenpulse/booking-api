@@ -1,13 +1,14 @@
 "use client";
 
 import * as React from "react";
-import { ArrowRight, LoaderCircle } from "lucide-react";
-import { useReducedMotion } from "motion/react";
+import { ArrowRight, LoaderCircle, X } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 import { parseAsString, useQueryState } from "nuqs";
 import { bookSlot, type BookState } from "@/app/actions";
 import { EmptyState } from "@/components/empty-state";
 import { ALL, ProviderTabs } from "@/components/provider-tabs";
 import type { SlotView } from "@/lib/format";
+import { TAB_SPRING } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
 type Day = { key: string; label: string; slots: SlotView[] };
@@ -22,12 +23,27 @@ function groupByDay(slots: SlotView[]): Day[] {
   return days;
 }
 
+const WIDE = "(min-width: 64rem)";
+
+function subscribeWide(onChange: () => void) {
+  const query = window.matchMedia(WIDE);
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
+}
+
 /** Slots arrive sorted by start time and already formatted in the clinic's zone. */
 export function SlotBoard({ slots, formKey }: { slots: SlotView[]; formKey: string }) {
   const [doctor, setDoctor] = useQueryState("doctor", parseAsString.withDefault(ALL));
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
+  const [sheetOpen, setSheetOpen] = React.useState(false);
   const panelRef = React.useRef<HTMLDivElement>(null);
-  const reduceMotion = useReducedMotion();
+  const fabRef = React.useRef<HTMLButtonElement>(null);
+  // Matches the lg breakpoint: the panel is a sidebar there and a bottom sheet below it.
+  const wide = React.useSyncExternalStore(
+    subscribeWide,
+    () => window.matchMedia(WIDE).matches,
+    () => false,
+  );
 
   const providers = React.useMemo(() => [...new Set(slots.map((s) => s.provider))].sort(), [slots]);
   // A shared link may name a doctor with no open slots left: show everyone instead.
@@ -36,13 +52,27 @@ export function SlotBoard({ slots, formKey }: { slots: SlotView[]; formKey: stri
   const selected = slots.find((s) => s.id === selectedId) ?? null;
   const open = slots.filter((s) => s.available).length;
 
-  function select(slot: SlotView) {
-    setSelectedId(slot.id);
-    // Below lg the panel sits under the list: bring the form into view.
-    if (!window.matchMedia("(min-width: 64rem)").matches) {
-      panelRef.current?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
-    }
-  }
+  const closeSheet = React.useCallback(() => {
+    setSheetOpen(false);
+    fabRef.current?.focus();
+  }, []);
+
+  // The sheet only exists below lg.
+  const sheetShown = sheetOpen && !wide;
+
+  React.useEffect(() => {
+    if (!sheetShown) return;
+    const root = document.documentElement;
+    const overflow = root.style.overflow;
+    root.style.overflow = "hidden";
+    panelRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && closeSheet();
+    window.addEventListener("keydown", onKey);
+    return () => {
+      root.style.overflow = overflow;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [sheetShown, closeSheet]);
 
   if (slots.length === 0) {
     return (
@@ -56,7 +86,7 @@ export function SlotBoard({ slots, formKey }: { slots: SlotView[]; formKey: stri
   }
 
   return (
-    <div className="mt-10 grid gap-5 lg:grid-cols-[minmax(0,1fr)_23rem] lg:items-start">
+    <div className={cn("mt-10 grid gap-5 lg:grid-cols-[minmax(0,1fr)_23rem] lg:items-start", selected && "max-lg:pb-20")}>
       <div className="min-w-0 space-y-4">
         <div className="sticky top-3 z-10 flex flex-wrap items-center justify-between gap-3">
           <ProviderTabs providers={providers} value={provider} onValueChange={(v) => void setDoctor(v || null)} />
@@ -79,7 +109,7 @@ export function SlotBoard({ slots, formKey }: { slots: SlotView[]; formKey: stri
             <ul className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4">
               {day.slots.map((slot) => (
                 <li key={slot.id}>
-                  <SlotButton slot={slot} selected={slot.id === selectedId} onSelect={() => select(slot)} />
+                  <SlotButton slot={slot} selected={slot.id === selectedId} onSelect={() => setSelectedId(slot.id)} />
                 </li>
               ))}
             </ul>
@@ -87,9 +117,59 @@ export function SlotBoard({ slots, formKey }: { slots: SlotView[]; formKey: stri
         ))}
       </div>
 
-      <div ref={panelRef} className="scroll-mt-3 lg:sticky lg:top-3">
-        <BookingPanel slot={selected} formKey={formKey} />
+      {/* One panel instance for both layouts, so the form keeps its state when the sheet closes. */}
+      <div
+        ref={panelRef}
+        tabIndex={-1}
+        role={wide ? undefined : "dialog"}
+        aria-modal={wide ? undefined : true}
+        aria-label={wide ? undefined : "Your visit"}
+        inert={!wide && !sheetShown}
+        className={cn(
+          "outline-none lg:sticky lg:top-3",
+          "max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-50 max-lg:max-h-[88dvh] max-lg:overflow-y-auto max-lg:overscroll-contain max-lg:rounded-t-[var(--radius-card)] max-lg:bg-background max-lg:pb-[env(safe-area-inset-bottom)] max-lg:motion-reduce:transition-none",
+          sheetShown
+            ? "max-lg:translate-y-0 max-lg:[transition:transform_350ms_var(--ease-out-quint)]"
+            : "max-lg:invisible max-lg:translate-y-full max-lg:[transition:transform_250ms_ease-in,visibility_0s_250ms]",
+        )}
+      >
+        <BookingPanel slot={selected} formKey={formKey} onClose={closeSheet} />
       </div>
+
+      <div
+        aria-hidden
+        onClick={closeSheet}
+        className={cn(
+          "fixed inset-0 z-40 bg-black/50 transition-opacity duration-300 lg:hidden",
+          sheetShown ? "opacity-100" : "pointer-events-none opacity-0",
+        )}
+      />
+
+      <AnimatePresence>
+        {selected && (
+          <motion.button
+            ref={fabRef}
+            type="button"
+            onClick={() => setSheetOpen(true)}
+            aria-haspopup="dialog"
+            aria-expanded={sheetShown}
+            initial={{ opacity: 0, y: 16, scale: 0.92 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 16, scale: 0.92 }}
+            transition={TAB_SPRING}
+            className="fixed right-4 bottom-[max(1rem,env(safe-area-inset-bottom))] z-30 inline-flex h-14 items-center gap-3 rounded-pill bg-primary pr-4 pl-5 text-primary-foreground shadow-lift outline-none transition-colors hover:bg-primary/85 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background active:scale-[0.98] lg:hidden"
+          >
+            <span className="flex flex-col items-start text-left">
+              <span className="font-display text-[19px] leading-none tracking-[-0.01em] tabular">{selected.time}</span>
+              <span className="mt-1 max-w-[9rem] truncate text-[11.5px] leading-none opacity-75">{selected.provider}</span>
+            </span>
+            <span aria-hidden className="h-7 w-px bg-current opacity-20" />
+            <span className="inline-flex items-center gap-1.5 text-sm font-medium">
+              Book <ArrowRight className="size-4" />
+            </span>
+          </motion.button>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -125,7 +205,7 @@ function SlotButton({ slot, selected, onSelect }: { slot: SlotView; selected: bo
   );
 }
 
-function BookingPanel({ slot, formKey }: { slot: SlotView | null; formKey: string }) {
+function BookingPanel({ slot, formKey, onClose }: { slot: SlotView | null; formKey: string; onClose: () => void }) {
   const [state, action, pending] = React.useActionState<BookState, FormData>(bookSlot, {
     error: null,
     field: null,
@@ -142,7 +222,17 @@ function BookingPanel({ slot, formKey }: { slot: SlotView | null; formKey: strin
 
   return (
     <section aria-label="Your visit" className="bento p-5">
-      <p className="readout">Your visit</p>
+      <div className="flex items-center justify-between gap-3">
+        <p className="readout">Your visit</p>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="-my-2 -mr-2 grid size-9 place-items-center rounded-full text-ink-2 outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring lg:hidden"
+        >
+          <X className="size-4" />
+        </button>
+      </div>
       {!slot ? (
         <EmptyState
           className="py-10"
